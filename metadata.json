@@ -1,0 +1,9 @@
+{
+  "name": "ATC.LACHGUER",
+  "description": "Une application avancée de mesure des accélérations verticales et transversales en temps réel avec analyse par IA et suivi PK par GPS.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
+}
