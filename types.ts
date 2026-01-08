@@ -15,9 +15,16 @@ export interface SessionConfig {
   startPK: number;
   direction: PKDirection;
   track: TrackType;
-  thresholdLA: number; // Alerte
-  thresholdLI: number; // Intervention
-  thresholdLAI: number; // Action Immédiate
+  thresholdLA: number; // Alerte (S1)
+  thresholdLI: number; // Intervention (S2)
+  thresholdLAI: number; // Action Immédiate (S3)
+  // Métadonnées pour le rapport
+  operator: string;
+  line: string;
+  train: string;
+  engineNumber: string;
+  position: string;
+  note: string;
 }
 
 export interface SessionStats extends SessionConfig {

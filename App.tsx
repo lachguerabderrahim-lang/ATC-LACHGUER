@@ -13,16 +13,23 @@ const App: React.FC = () => {
   const [currentAccel, setCurrentAccel] = useState<AccelerationData>({ timestamp: 0, x: 0, y: 0, z: 0, magnitude: 0 });
   
   // Vitesse et GPS
-  const [speedMps, setSpeedMps] = useState<number>(0); // Meters per second
+  const [speedMps, setSpeedMps] = useState<number>(0); 
   const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null);
 
-  // Config
-  const [startPK, setStartPK] = useState<string>('');
+  // Config Session & Métadonnées
+  const [startPK, setStartPK] = useState<string>('175.100');
   const [direction, setDirection] = useState<PKDirection>('croissant');
-  const [track, setTrack] = useState<TrackType>('LGV1');
-  const [la, setLa] = useState<number>(1.5);
-  const [li, setLi] = useState<number>(2.5);
-  const [lai, setLai] = useState<number>(4.0);
+  const [track, setTrack] = useState<TrackType>('LGV2');
+  const [la, setLa] = useState<number>(1.2);
+  const [li, setLi] = useState<number>(2.2);
+  const [lai, setLai] = useState<number>(2.8);
+  
+  const [operator, setOperator] = useState<string>('LACHGUER');
+  const [line, setLine] = useState<string>('KENITRA/TANGER');
+  const [train, setTrain] = useState<string>('RGV');
+  const [engineNumber, setEngineNumber] = useState<string>('1208M1');
+  const [position, setPosition] = useState<string>('EN QUEUE');
+  const [note, setNote] = useState<string>('');
 
   // Historique et Sélection
   const [history, setHistory] = useState<SessionRecord[]>([]);
@@ -34,7 +41,8 @@ const App: React.FC = () => {
   const [exportPKEnd, setExportPKEnd] = useState<string>('');
 
   const [stats, setStats] = useState<SessionStats>({ 
-    startPK: 0, direction: 'croissant', track: 'LGV1', thresholdLA: 1.5, thresholdLI: 2.5, thresholdLAI: 4.0,
+    startPK: 0, direction: 'croissant', track: 'LGV1', thresholdLA: 1.2, thresholdLI: 2.2, thresholdLAI: 2.8,
+    operator: '', line: '', train: '', engineNumber: '', position: '', note: '',
     maxVertical: 0, maxTransversal: 0, avgMagnitude: 0, duration: 0, countLA: 0, countLI: 0, countLAI: 0 
   });
 
@@ -50,9 +58,8 @@ const App: React.FC = () => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const watchIdRef = useRef<number | null>(null);
 
-  // Charger l'historique au montage
   useEffect(() => {
-    const stored = localStorage.getItem('gforce_history_v2');
+    const stored = localStorage.getItem('gforce_history_v4');
     if (stored) {
       try {
         setHistory(JSON.parse(stored));
@@ -64,7 +71,6 @@ const App: React.FC = () => {
 
   const requestPermissions = async () => {
     try {
-      // Accéléromètre
       if (typeof (DeviceMotionEvent as any).requestPermission === 'function') {
         const response = await (DeviceMotionEvent as any).requestPermission();
         if (response !== 'granted') {
@@ -72,8 +78,6 @@ const App: React.FC = () => {
           return;
         }
       }
-      
-      // Géolocalisation
       navigator.geolocation.getCurrentPosition(
         () => setPermissionGranted(true),
         (err) => {
@@ -82,18 +86,16 @@ const App: React.FC = () => {
         },
         { enableHighAccuracy: true }
       );
-      
     } catch (e) {
       setError("Erreur lors de la demande de permissions.");
     }
   };
 
-  // Suivi de la position et de la vitesse
   useEffect(() => {
     if (isMeasuring && permissionGranted) {
       watchIdRef.current = navigator.geolocation.watchPosition(
         (pos) => {
-          const speed = pos.coords.speed || 0; // Speed is in m/s
+          const speed = pos.coords.speed || 0;
           setSpeedMps(speed);
           currentSpeedRef.current = speed;
           setGpsAccuracy(pos.coords.accuracy);
@@ -119,15 +121,11 @@ const App: React.FC = () => {
     if (!accel || accel.x === null || accel.y === null || accel.z === null) return;
 
     const timestamp = Date.now();
-    
-    // Calcul de l'intervalle de temps depuis la dernière mesure (en secondes)
     const dt = lastTimestampRef.current === 0 ? 0 : (timestamp - lastTimestampRef.current) / 1000;
     lastTimestampRef.current = timestamp;
 
-    // Calcul de la distance parcourue (en kilomètres) : d = v * t
     const deltaDistanceKm = (currentSpeedRef.current * dt) / 1000;
     
-    // Mise à jour du PK uniquement si mouvement détecté
     if (deltaDistanceKm > 0) {
       if (direction === 'croissant') {
         currentPKRef.current += deltaDistanceKm;
@@ -140,16 +138,10 @@ const App: React.FC = () => {
     const y = accel.y || 0;
     const z = accel.z || 0;
     const magnitude = Math.sqrt(x * x + y * y + z * z);
-    
     const duration = (timestamp - (dataRef.current[0]?.timestamp || timestamp)) / 1000;
 
     const newData: AccelerationData = { 
-      timestamp, 
-      x, 
-      y, 
-      z, 
-      magnitude, 
-      pk: currentPKRef.current 
+      timestamp, x, y, z, magnitude, pk: currentPKRef.current 
     };
     
     setCurrentAccel(newData);
@@ -198,7 +190,11 @@ const App: React.FC = () => {
     
     if (isMeasuring) {
       setIsMeasuring(false);
-      const finalStats = { ...stats, startPK: parseFloat(startPK) || 0 };
+      const finalStats = { 
+        ...stats, 
+        startPK: parseFloat(startPK) || 0,
+        operator, line, train, engineNumber, position, note
+      };
       const newRecord: SessionRecord = {
         id: `sess_${Date.now()}`,
         date: new Date().toLocaleString('fr-FR'),
@@ -208,7 +204,7 @@ const App: React.FC = () => {
       };
       const updatedHistory = [newRecord, ...history].slice(0, 10);
       setHistory(updatedHistory);
-      localStorage.setItem('gforce_history_v2', JSON.stringify(updatedHistory));
+      localStorage.setItem('gforce_history_v4', JSON.stringify(updatedHistory));
       setSelectedSession(newRecord);
     } else {
       const numericPK = parseFloat(startPK) || 0;
@@ -220,6 +216,7 @@ const App: React.FC = () => {
       setSelectedSession(null);
       setStats({ 
         startPK: numericPK, direction, track, thresholdLA: la, thresholdLI: li, thresholdLAI: lai,
+        operator, line, train, engineNumber, position, note,
         maxVertical: 0, maxTransversal: 0, avgMagnitude: 0, duration: 0, countLA: 0, countLI: 0, countLAI: 0 
       });
       setIsMeasuring(true);
@@ -229,7 +226,6 @@ const App: React.FC = () => {
   const handleAnalyze = async () => {
     const sourceData = selectedSession ? selectedSession.data : dataRef.current;
     const sourceStats = selectedSession ? selectedSession.stats : stats;
-    
     if (sourceData.length < 50) return;
     setIsAnalyzing(true);
     try {
@@ -237,7 +233,7 @@ const App: React.FC = () => {
       if (selectedSession) {
         const updated = history.map(h => h.id === selectedSession.id ? { ...h, analysis: result } : h);
         setHistory(updated);
-        localStorage.setItem('gforce_history_v2', JSON.stringify(updated));
+        localStorage.setItem('gforce_history_v4', JSON.stringify(updated));
         setSelectedSession({ ...selectedSession, analysis: result });
       } else {
         setAnalysis(result);
@@ -247,23 +243,6 @@ const App: React.FC = () => {
     } finally {
       setIsAnalyzing(false);
     }
-  };
-
-  const exportCSV = () => {
-    const targetData = selectedSession ? selectedSession.data : dataRef.current;
-    if (!targetData.length) return;
-
-    const headers = "Timestamp,PK,X (Lat),Y (Trans),Z (Vert),Magnitude\n";
-    const csvRows = targetData.map(d => 
-      `${d.timestamp},${d.pk?.toFixed(4)},${d.x.toFixed(4)},${d.y.toFixed(4)},${d.z.toFixed(4)},${d.magnitude.toFixed(4)}`
-    ).join("\n");
-
-    const blob = new Blob([headers + csvRows], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `GForce_Data_${selectedSession?.id || 'current'}.csv`;
-    a.click();
   };
 
   const handlePDFExportClick = () => {
@@ -278,328 +257,439 @@ const App: React.FC = () => {
 
   const executePDFExport = async () => {
     if (!chartContainerRef.current) return;
-    
     const targetData = selectedSession ? selectedSession.data : dataRef.current;
     const pStart = parseFloat(exportPKStart);
     const pEnd = parseFloat(exportPKEnd);
-
+    
+    // Filtrer les données pour l'export
     const filteredData = targetData.filter(d => {
       const pk = d.pk || 0;
       return pk >= Math.min(pStart, pEnd) && pk <= Math.max(pStart, pEnd);
     });
 
-    const originalData = data;
-    if (!selectedSession) setData(filteredData);
-    
     setIsPDFModalOpen(false);
     
-    setTimeout(async () => {
-      const doc = new jsPDF('p', 'mm', 'a4');
-      const s = selectedSession ? selectedSession.stats : stats;
-      const a = selectedSession ? selectedSession.analysis : analysis;
+    // Créer un conteneur temporaire pour rendre les graphiques en style PDF (fond blanc)
+    const exportDiv = document.createElement('div');
+    exportDiv.style.position = 'absolute';
+    exportDiv.style.left = '-9999px';
+    exportDiv.style.width = '1000px';
+    exportDiv.style.backgroundColor = 'white';
+    exportDiv.style.padding = '40px';
+    document.body.appendChild(exportDiv);
 
-      doc.setFillColor(15, 23, 42); 
-      doc.rect(0, 0, 210, 20, 'F');
-      doc.setTextColor(255, 255, 255);
-      doc.setFontSize(16);
-      doc.text("RAPPORT D'INSPECTION G-FORCE PRO", 105, 12, { align: 'center' });
+    // Fonction pour générer une image de graphique
+    const generateChartImage = async (dataKey: 'z' | 'y', label: string, stroke: string, thresholds?: any) => {
+      const container = document.createElement('div');
+      container.style.width = '900px';
+      container.style.height = '400px';
+      container.style.marginBottom = '20px';
+      exportDiv.appendChild(container);
 
-      doc.setTextColor(30, 41, 59);
-      doc.setFontSize(10);
-      doc.text(`Voie: ${s.track} | Direction: ${s.direction}`, 20, 30);
-      doc.text(`Zone PK : ${pStart.toFixed(3)} à ${pEnd.toFixed(3)}`, 20, 36);
-      doc.text(`Date Session: ${selectedSession?.date || new Date().toLocaleString()}`, 20, 42);
+      // On utilise temporairement ReactDOM pour rendre le graphique Recharts
+      const root = (await import('react-dom/client')).createRoot(container);
+      
+      return new Promise<string>((resolve) => {
+        root.render(
+          <div style={{ background: 'white', color: 'black' }}>
+            <MotionChart 
+              data={filteredData} 
+              dataKey={dataKey} 
+              name={label} 
+              stroke={stroke} 
+              thresholds={thresholds}
+            />
+          </div>
+        );
+        setTimeout(async () => {
+          const canvas = await html2canvas(container, { scale: 2, backgroundColor: 'white' });
+          resolve(canvas.toDataURL('image/png'));
+          exportDiv.removeChild(container);
+        }, 1000);
+      });
+    };
 
-      doc.text("--- STATISTIQUES ---", 20, 54);
-      doc.text(`Accélération Verticale Max (Z): ${s.maxVertical.toFixed(2)} m/s²`, 25, 60);
-      doc.text(`Accélération Transversale Max (Y): ${s.maxTransversal.toFixed(2)} m/s²`, 25, 66);
-      doc.text(`Dépassements Seuils Y: LA=${s.countLA} | LI=${s.countLI} | LAI=${s.countLAI}`, 25, 72);
+    const imgATC = await generateChartImage('z', 'ATC (m/s²)', '#3b82f6', { la, li, lai });
+    const imgAVC = await generateChartImage('y', 'AVC (m/s²)', '#f43f5e');
 
-      if (a) {
-        doc.text("--- ANALYSE IA GEMINI ---", 20, 84);
-        doc.text(`Conformité: ${a.complianceLevel}`, 25, 90);
-        doc.text(`Type d'activité: ${a.activityType}`, 25, 96);
-        const obs = doc.splitTextToSize(`Observations: ${a.observations.join('; ')}`, 160);
-        doc.text(obs, 25, 102);
-        const rec = doc.splitTextToSize(`Recommandations: ${a.recommendations}`, 160);
-        doc.text(rec, 25, 116);
-      }
+    const doc = new jsPDF('p', 'mm', 'a4');
+    const s = selectedSession ? selectedSession.stats : stats;
+    const dateFull = selectedSession ? selectedSession.date : new Date().toLocaleString('fr-FR');
+    const [dPart, tPart] = dateFull.split(' ');
 
-      try {
-        const canvas = await html2canvas(chartContainerRef.current, { backgroundColor: '#0f172a' });
-        const imgData = canvas.toDataURL('image/png');
-        doc.addPage();
-        doc.text(`VISUALISATION DES ACCÉLÉRATIONS (PK ${pStart.toFixed(3)} - ${pEnd.toFixed(3)})`, 105, 15, { align: 'center' });
-        doc.addImage(imgData, 'PNG', 10, 25, 190, 0);
-      } catch (e) {
-        console.error("PDF Image Error", e);
-      }
+    // --- Header ATC LACHGUER ---
+    doc.setFontSize(26);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(30, 58, 138); // Dark Blue
+    doc.text("ATC", 140, 20);
+    doc.setTextColor(59, 130, 246); // Medium Blue
+    doc.text("LACHGUER", 154, 20);
+    doc.setDrawColor(30, 58, 138);
+    doc.setLineWidth(0.8);
+    doc.line(140, 22, 195, 22);
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "italic");
+    doc.setTextColor(100, 100, 100);
+    doc.text("Expertise & Mesures Ferroviaires", 150, 26);
 
-      doc.save(`GForce_Rapport_${selectedSession?.id || 'current'}.pdf`);
-      if (!selectedSession) setData(originalData);
-    }, 500);
+    // --- Report Metadata ---
+    doc.setFontSize(14);
+    doc.setTextColor(0, 0, 0);
+    doc.setFont("helvetica", "bold");
+    const reportId = `${dPart.replace(/\//g, '')}_${tPart.replace(/:/g, '')}_${s.track}`;
+    doc.text(`RAPPORT ${reportId}`, 20, 20);
+
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    let yPos = 35;
+    const lineSpacing = 6;
+    doc.text(`Date : ${dPart}, Heure : ${tPart}, Opérateur : ${s.operator}`, 20, yPos); yPos += lineSpacing;
+    doc.text(`Secteur : LGV, Ligne : ${s.line}`, 20, yPos); yPos += lineSpacing;
+    doc.text(`Voie : ${s.track}, PK : ${pStart.toFixed(5)} à ${pEnd.toFixed(5)}`, 20, yPos); yPos += lineSpacing;
+    doc.text(`Train : ${s.train}, N° motrice : ${s.engineNumber}, Position : ${s.position}`, 20, yPos); yPos += lineSpacing;
+    doc.text(`Note : ${s.note || 'RAS'}`, 20, yPos); yPos += lineSpacing;
+    doc.text(`Seuils ATC S1 / S2 / S3 : ${la.toFixed(1)} / ${li.toFixed(1)} / ${lai.toFixed(1)} m/s²`, 20, yPos); yPos += lineSpacing;
+    doc.text(`Seuils AVC S1 / S2 / S3 : 0,0 / 0,0 / 0,0 m/s²`, 20, yPos);
+
+    // --- Graphiques ---
+    doc.addImage(imgATC, 'PNG', 15, 80, 180, 80);
+    doc.addImage(imgAVC, 'PNG', 15, 170, 180, 80);
+
+    // --- Footer ---
+    doc.setFontSize(14);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(30, 58, 138);
+    doc.text("ATC LACHGUER", 20, 285);
+    doc.setFontSize(10);
+    doc.setTextColor(0, 0, 0);
+    doc.text("Page 1 / 1", 100, 285);
+
+    doc.save(`Rapport_ATC_${reportId}.pdf`);
+    document.body.removeChild(exportDiv);
   };
 
-  const getAlertColor = () => {
-    if (selectedSession) return 'bg-slate-700'; 
-    const absY = Math.abs(currentAccel.y);
-    if (absY >= lai) return 'bg-red-500 shadow-[0_0_20px_rgba(239,68,68,0.6)] animate-pulse';
-    if (absY >= li) return 'bg-orange-500 shadow-[0_0_15px_rgba(249,115,22,0.4)]';
-    if (absY >= la) return 'bg-yellow-500';
-    return 'bg-slate-700';
+  const deleteSession = (id: string) => {
+    const updated = history.filter(h => h.id !== id);
+    setHistory(updated);
+    localStorage.setItem('gforce_history_v4', JSON.stringify(updated));
+    if (selectedSession?.id === id) setSelectedSession(null);
   };
-
-  const activeStats = selectedSession ? selectedSession.stats : stats;
-  const activeData = selectedSession ? selectedSession.data : data;
-  const activeAnalysis = selectedSession ? selectedSession.analysis : analysis;
 
   return (
-    <div className="min-h-screen p-4 md:p-8 max-w-5xl mx-auto flex flex-col gap-6 font-sans">
-      <header className="flex flex-col sm:flex-row items-center justify-between bg-slate-900/50 p-6 rounded-3xl border border-slate-800 shadow-2xl gap-4">
-        <div>
-          <h1 className="text-3xl font-black bg-gradient-to-r from-cyan-400 via-indigo-400 to-pink-500 bg-clip-text text-transparent">
-            G-FORCE MONITOR PRO
-          </h1>
-          <p className="text-slate-500 text-xs font-bold tracking-[0.2em] mt-1 uppercase">Infrastructure Inspection Suite</p>
+    <div className="min-h-screen bg-[#0f172a] text-slate-200 pb-20 font-sans selection:bg-blue-500/30">
+      {/* Header Bar */}
+      <header className="sticky top-0 z-40 bg-[#0f172a]/80 backdrop-blur-md border-b border-slate-800 px-4 py-3 flex justify-between items-center">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-indigo-700 rounded-xl flex items-center justify-center shadow-lg shadow-blue-900/20">
+            <i className="fas fa-train-subway text-white"></i>
+          </div>
+          <div>
+            <h1 className="text-lg font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">G-Force Monitor Pro</h1>
+            <p className="text-[10px] text-slate-500 font-mono tracking-tighter uppercase">ATC LACHGUER - Infrastructure Analysis</p>
+          </div>
         </div>
-        <div className="flex gap-4 items-center">
-          <div className="flex flex-col items-end">
-            <span className="text-[9px] font-black text-slate-500 uppercase">GPS Precision</span>
-            <span className={`text-xs font-bold ${gpsAccuracy && gpsAccuracy < 10 ? 'text-emerald-400' : 'text-orange-400'}`}>
-              {gpsAccuracy ? `±${gpsAccuracy.toFixed(1)}m` : 'Off'}
-            </span>
-          </div>
-          <div className="flex gap-2">
-            {history.length > 0 && (
-              <div className="relative group">
-                <button className="bg-slate-800 p-3 rounded-xl hover:bg-slate-700 transition-colors">
-                  <i className="fas fa-history text-cyan-400"></i>
-                </button>
-                <div className="absolute right-0 mt-2 w-64 bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl hidden group-hover:block z-50 overflow-hidden">
-                  <div className="p-3 border-b border-slate-800 text-[10px] font-black text-slate-500 uppercase">Sessions Récentes</div>
-                  {history.map(s => (
-                    <button key={s.id} onClick={() => setSelectedSession(s)} className="w-full p-3 hover:bg-slate-800 text-left text-xs flex justify-between items-center">
-                      <span>{s.date.split(',')[0]} - {s.stats.track}</span>
-                      <i className="fas fa-chevron-right text-slate-600"></i>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-            <div className={`h-10 w-10 flex items-center justify-center rounded-xl border-2 border-slate-800 ${isMeasuring ? 'bg-red-500 animate-pulse' : 'bg-slate-800'}`}>
-              <i className={`fas ${isMeasuring ? 'fa-video' : 'fa-video-slash'} text-white`}></i>
+        <div className="flex gap-2">
+          {gpsAccuracy !== null && (
+            <div className={`px-2 py-1 rounded text-[10px] font-bold border ${gpsAccuracy < 10 ? 'bg-green-500/10 border-green-500/50 text-green-400' : 'bg-orange-500/10 border-orange-500/50 text-orange-400'}`}>
+              GPS: {gpsAccuracy.toFixed(1)}m
             </div>
-          </div>
+          )}
+          <button 
+            onClick={toggleMeasurement}
+            className={`px-4 py-2 rounded-xl text-sm font-bold transition-all flex items-center gap-2 ${
+              isMeasuring 
+                ? 'bg-red-500 hover:bg-red-600 shadow-lg shadow-red-900/40 animate-pulse' 
+                : 'bg-blue-600 hover:bg-blue-700 shadow-lg shadow-blue-900/40'
+            }`}
+          >
+            <i className={`fas ${isMeasuring ? 'fa-stop-circle' : 'fa-play-circle'}`}></i>
+            {isMeasuring ? 'STOP' : 'DÉMARRER'}
+          </button>
         </div>
       </header>
 
-      {error && (
-        <div className="bg-red-500/20 border border-red-500/50 p-4 rounded-2xl text-red-200 text-sm font-bold flex items-center gap-3">
-          <i className="fas fa-exclamation-triangle"></i> {error}
-        </div>
-      )}
+      <main className="max-w-4xl mx-auto p-4 space-y-6">
+        {error && (
+          <div className="bg-red-500/10 border border-red-500/50 p-4 rounded-xl flex items-center gap-3 text-red-400 text-sm">
+            <i className="fas fa-exclamation-triangle"></i>
+            {error}
+          </div>
+        )}
 
-      {/* Modal Range Selection PDF */}
-      {isPDFModalOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fade-in">
-          <div className="bg-slate-900 border border-slate-800 rounded-[2rem] p-8 max-w-md w-full shadow-2xl">
-            <h2 className="text-xl font-black text-white uppercase mb-6 flex items-center gap-3">
-              <i className="fas fa-file-pdf text-red-500"></i> Configuration Export
+        {/* Configuration Panel */}
+        {!isMeasuring && !selectedSession && (
+          <div className="glass-card p-6 rounded-2xl border border-slate-800">
+            <h2 className="text-sm font-black text-slate-500 uppercase tracking-widest mb-6 flex items-center gap-2">
+              <i className="fas fa-sliders text-blue-500"></i> Configuration Inspection
             </h2>
-            <p className="text-sm text-slate-400 mb-6 font-medium">Définissez la zone PK à extraire pour le rapport graphique :</p>
-            <div className="grid grid-cols-2 gap-4 mb-8">
-              <div className="flex flex-col gap-1">
-                <label className="text-[10px] text-slate-500 font-black uppercase">PK Début</label>
-                <input type="number" step="0.001" value={exportPKStart} onChange={(e) => setExportPKStart(e.target.value)} className="bg-slate-950 border border-slate-800 rounded-xl p-4 text-white font-mono" />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="space-y-4">
+                <div className="group">
+                  <label className="text-[10px] text-slate-500 font-bold uppercase mb-1 block ml-1">Point Kilométrique (PK)</label>
+                  <input 
+                    type="number" step="0.001" value={startPK} onChange={(e) => setStartPK(e.target.value)}
+                    className="w-full bg-slate-900/50 border border-slate-700 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all text-blue-400 font-mono"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-[10px] text-slate-500 font-bold uppercase mb-1 block ml-1">Sens PK</label>
+                    <select value={direction} onChange={(e) => setDirection(e.target.value as PKDirection)}
+                      className="w-full bg-slate-900/50 border border-slate-700 rounded-xl px-3 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500/50">
+                      <option value="croissant">Croissant</option>
+                      <option value="decroissant">Décroissant</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-500 font-bold uppercase mb-1 block ml-1">Voie</label>
+                    <select value={track} onChange={(e) => setTrack(e.target.value as TrackType)}
+                      className="w-full bg-slate-900/50 border border-slate-700 rounded-xl px-3 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500/50">
+                      <option value="LGV1">LGV 1</option>
+                      <option value="LGV2">LGV 2</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                   <div>
+                    <label className="text-[9px] text-slate-500 font-bold uppercase mb-1 block">Alerte (LA)</label>
+                    <input type="number" step="0.1" value={la} onChange={(e) => setLa(parseFloat(e.target.value))}
+                      className="w-full bg-slate-900/50 border border-slate-700 rounded-lg px-2 py-2 text-center text-xs" />
+                  </div>
+                  <div>
+                    <label className="text-[9px] text-slate-500 font-bold uppercase mb-1 block">Interv (LI)</label>
+                    <input type="number" step="0.1" value={li} onChange={(e) => setLi(parseFloat(e.target.value))}
+                      className="w-full bg-slate-900/50 border border-slate-700 rounded-lg px-2 py-2 text-center text-xs" />
+                  </div>
+                  <div>
+                    <label className="text-[9px] text-slate-500 font-bold uppercase mb-1 block">Immed (LAI)</label>
+                    <input type="number" step="0.1" value={lai} onChange={(e) => setLai(parseFloat(e.target.value))}
+                      className="w-full bg-slate-900/50 border border-slate-700 rounded-lg px-2 py-2 text-center text-xs" />
+                  </div>
+                </div>
               </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-[10px] text-slate-500 font-black uppercase">PK Fin</label>
-                <input type="number" step="0.001" value={exportPKEnd} onChange={(e) => setExportPKEnd(e.target.value)} className="bg-slate-950 border border-slate-800 rounded-xl p-4 text-white font-mono" />
+
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-[10px] text-slate-500 font-bold uppercase mb-1 block">Opérateur</label>
+                    <input value={operator} onChange={(e) => setOperator(e.target.value)} className="w-full bg-slate-900/50 border border-slate-700 rounded-xl px-3 py-3 text-sm" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-500 font-bold uppercase mb-1 block">Train</label>
+                    <input value={train} onChange={(e) => setTrain(e.target.value)} className="w-full bg-slate-900/50 border border-slate-700 rounded-xl px-3 py-3 text-sm" />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-500 font-bold uppercase mb-1 block">N° Motrice</label>
+                  <input value={engineNumber} onChange={(e) => setEngineNumber(e.target.value)} className="w-full bg-slate-900/50 border border-slate-700 rounded-xl px-3 py-3 text-sm" />
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-500 font-bold uppercase mb-1 block">Position</label>
+                  <input value={position} onChange={(e) => setPosition(e.target.value)} className="w-full bg-slate-900/50 border border-slate-700 rounded-xl px-3 py-3 text-sm" />
+                </div>
               </div>
             </div>
-            <div className="flex gap-3">
-              <button onClick={() => setIsPDFModalOpen(false)} className="flex-1 py-4 bg-slate-800 text-white rounded-2xl font-black text-sm uppercase">Annuler</button>
-              <button onClick={executePDFExport} className="flex-1 py-4 bg-red-600 text-white rounded-2xl font-black text-sm uppercase shadow-lg shadow-red-900/20">Exporter PDF</button>
+          </div>
+        )}
+
+        {/* Dashboards */}
+        {(isMeasuring || selectedSession) && (
+          <div className="space-y-6">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <ValueDisplay label="Vitesse" value={speedMps * 3.6} unit="km/h" color="text-blue-400" icon="fa-gauge-high" />
+              <ValueDisplay label="PK Actuel" value={selectedSession ? (selectedSession.data[selectedSession.data.length-1]?.pk || 0) : currentAccel.pk || 0} unit="km" color="text-indigo-400" icon="fa-location-dot" />
+              <ValueDisplay label="Acc. Verticale" value={selectedSession ? selectedSession.stats.maxVertical : stats.maxVertical} unit="m/s²" color="text-emerald-400" icon="fa-arrows-up-down" />
+              <ValueDisplay label="Dépassements LI/LAI" value={selectedSession ? (selectedSession.stats.countLI + selectedSession.stats.countLAI) : (stats.countLI + stats.countLAI)} unit="pts" color="text-orange-400" icon="fa-triangle-exclamation" />
             </div>
-          </div>
-        </div>
-      )}
 
-      {/* Mode Historique - Bannière */}
-      {selectedSession && (
-        <div className="bg-cyan-500/10 border border-cyan-500/30 p-4 rounded-2xl flex justify-between items-center animate-fade-in">
-          <div className="flex items-center gap-3">
-            <i className="fas fa-info-circle text-cyan-500"></i>
-            <span className="text-sm font-bold text-cyan-200 uppercase">Consultation Historique : {selectedSession.date}</span>
-          </div>
-          <button onClick={() => setSelectedSession(null)} className="text-xs font-black bg-cyan-500 text-slate-900 px-4 py-1 rounded-full">RETOUR DIRECT</button>
-        </div>
-      )}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6" ref={chartContainerRef}>
+              <MotionChart data={selectedSession ? selectedSession.data : data} dataKey="z" name="ATC (m/s²) - Verticale" stroke="#3b82f6" thresholds={{ la, li, lai }} />
+              <MotionChart data={selectedSession ? selectedSession.data : data} dataKey="y" name="AVC (m/s²) - Transversale" stroke="#f43f5e" />
+            </div>
 
-      {/* Configuration */}
-      {!selectedSession && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="glass-card p-5 rounded-3xl flex flex-col gap-4">
-            <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
-              <i className="fas fa-map-marker-alt text-cyan-500"></i> Localisation & GPS
+            {/* Actions Contextuelles */}
+            <div className="flex flex-wrap gap-4 items-center justify-center pt-4">
+              <button 
+                onClick={handleAnalyze} 
+                disabled={isAnalyzing || (selectedSession ? selectedSession.data.length < 10 : data.length < 10)}
+                className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 px-6 py-3 rounded-2xl font-bold flex items-center gap-2 transition-all shadow-xl shadow-indigo-900/20"
+              >
+                {isAnalyzing ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-brain"></i>}
+                ANALYSER PAR IA
+              </button>
+              <button 
+                onClick={handlePDFExportClick}
+                className="bg-slate-700 hover:bg-slate-600 px-6 py-3 rounded-2xl font-bold flex items-center gap-2 transition-all shadow-xl shadow-slate-900/20"
+              >
+                <i className="fas fa-file-pdf"></i>
+                EXPORTER PDF (ATC LACHGUER)
+              </button>
+            </div>
+
+            {/* AI Result Card */}
+            {(analysis || (selectedSession && selectedSession.analysis)) && (
+              <div className="glass-card p-6 rounded-3xl border border-blue-500/30 bg-blue-500/5 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                <div className="flex justify-between items-start mb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 bg-blue-500 rounded-2xl flex items-center justify-center text-2xl">
+                      <i className="fas fa-robot text-white"></i>
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-lg text-white">Rapport d'Analyse IA</h3>
+                      <p className="text-xs text-blue-400 font-medium uppercase tracking-wider">Expertise Infrastructure</p>
+                    </div>
+                  </div>
+                  <div className={`px-4 py-1 rounded-full text-xs font-black uppercase tracking-widest ${
+                    (selectedSession?.analysis || analysis)?.complianceLevel === 'Conforme' ? 'bg-green-500/20 text-green-400' :
+                    (selectedSession?.analysis || analysis)?.complianceLevel === 'Surveillance' ? 'bg-orange-500/20 text-orange-400' : 'bg-red-500/20 text-red-400'
+                  }`}>
+                    {(selectedSession?.analysis || analysis)?.complianceLevel}
+                  </div>
+                </div>
+                
+                <div className="space-y-4">
+                  <div className="bg-slate-900/60 p-4 rounded-xl border border-slate-800">
+                    <p className="text-sm italic text-slate-300">
+                      "{(selectedSession?.analysis || analysis)?.recommendations}"
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <p className="text-[10px] font-bold text-slate-500 uppercase">Observations Techniques</p>
+                      <ul className="text-sm space-y-1">
+                        {(selectedSession?.analysis || analysis)?.observations.map((obs, i) => (
+                          <li key={i} className="flex gap-2 items-start">
+                            <span className="text-blue-500 mt-1">•</span>
+                            <span className="text-slate-400">{obs}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                    <div className="flex flex-col justify-center items-center p-4 bg-slate-800/50 rounded-2xl">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase mb-2">Score d'Intensité</span>
+                      <div className="text-4xl font-black text-blue-400">{(selectedSession?.analysis || analysis)?.intensityScore}<span className="text-sm text-slate-600">/100</span></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* History Section */}
+        {!isMeasuring && !selectedSession && history.length > 0 && (
+          <div className="space-y-4">
+            <h2 className="text-sm font-black text-slate-500 uppercase tracking-widest flex items-center gap-2 px-2">
+              <i className="fas fa-history text-indigo-500"></i> Historique des Mesures
             </h2>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="flex flex-col gap-1">
-                <label className="text-[10px] text-slate-500 font-bold uppercase ml-1">Voie</label>
-                <select value={track} onChange={(e) => setTrack(e.target.value as TrackType)} disabled={isMeasuring} className="bg-slate-900 border border-slate-700 rounded-xl p-3 text-white font-bold text-sm outline-none">
-                  <option value="LGV1">LGV1</option>
-                  <option value="LGV2">LGV2</option>
-                </select>
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-[10px] text-slate-500 font-bold uppercase ml-1">PK Départ</label>
-                <input type="number" step="0.001" value={startPK} onChange={(e) => setStartPK(e.target.value)} disabled={isMeasuring} className="bg-slate-900 border border-slate-700 rounded-xl p-3 text-white font-mono text-sm" placeholder="---" />
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-[10px] text-slate-500 font-bold uppercase ml-1">Direction</label>
-                <select value={direction} onChange={(e) => setDirection(e.target.value as PKDirection)} disabled={isMeasuring} className="bg-slate-900 border border-slate-700 rounded-xl p-3 text-white font-bold text-sm">
-                  <option value="croissant">Croissant (+)</option>
-                  <option value="decroissant">Décroissant (-)</option>
-                </select>
-              </div>
+            <div className="grid grid-cols-1 gap-3">
+              {history.map(record => (
+                <div 
+                  key={record.id} 
+                  className="glass-card p-4 rounded-2xl border border-slate-800 flex justify-between items-center transition-all hover:border-slate-600 hover:bg-slate-800/40 cursor-pointer group"
+                  onClick={() => setSelectedSession(record)}
+                >
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 bg-slate-800 rounded-xl flex flex-col items-center justify-center text-[10px] font-bold text-slate-400 group-hover:bg-blue-600 group-hover:text-white transition-colors">
+                      <span>{record.date.split(' ')[0].split('/')[0]}</span>
+                      <span className="uppercase">{record.date.split(' ')[0].split('/')[1]}</span>
+                    </div>
+                    <div>
+                      <div className="font-bold text-slate-200">Session {record.stats.track} - {record.stats.line}</div>
+                      <div className="text-[10px] text-slate-500 flex gap-3 font-mono">
+                        <span>PK: {record.stats.startPK.toFixed(3)}</span>
+                        <span>DUR: {record.stats.duration.toFixed(0)}s</span>
+                        <span className={record.stats.countLI > 0 ? 'text-orange-400' : ''}>ANOM: {record.stats.countLI + record.stats.countLAI}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    {record.analysis && <i className="fas fa-robot text-blue-500"></i>}
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); deleteSession(record.id); }}
+                      className="w-8 h-8 rounded-lg bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white transition-all flex items-center justify-center"
+                    >
+                      <i className="fas fa-trash-can text-xs"></i>
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
+        )}
 
-          <div className="glass-card p-5 rounded-3xl flex flex-col gap-4">
-            <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
-              <i className="fas fa-tachometer-alt text-orange-500"></i> Seuils Y (m/s²)
-            </h2>
-            <div className="grid grid-cols-3 gap-3">
-              <div className="flex flex-col gap-1">
-                <label className="text-[10px] text-yellow-500 font-bold uppercase ml-1">LA</label>
-                <input type="number" step="0.1" value={la} onChange={(e) => setLa(parseFloat(e.target.value) || 0)} disabled={isMeasuring} className="bg-slate-900 border border-yellow-500/30 rounded-xl p-3 text-white font-mono text-sm" />
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-[10px] text-orange-500 font-bold uppercase ml-1">LI</label>
-                <input type="number" step="0.1" value={li} onChange={(e) => setLi(parseFloat(e.target.value) || 0)} disabled={isMeasuring} className="bg-slate-900 border border-orange-500/30 rounded-xl p-3 text-white font-mono text-sm" />
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-[10px] text-red-500 font-bold uppercase ml-1">LAI</label>
-                <input type="number" step="0.1" value={lai} onChange={(e) => setLai(parseFloat(e.target.value) || 0)} disabled={isMeasuring} className="bg-slate-900 border border-red-500/30 rounded-xl p-3 text-white font-mono text-sm" />
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div className="flex flex-wrap gap-4">
-        {!selectedSession && (
-          <button onClick={toggleMeasurement} className={`flex-1 py-5 rounded-3xl font-black text-lg transition-all flex items-center justify-center gap-4 shadow-xl ${isMeasuring ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-gradient-to-r from-cyan-600 to-indigo-600 text-white'}`}>
-            <i className={`fas ${isMeasuring ? 'fa-stop' : 'fa-play'}`}></i>
-            {isMeasuring ? 'STOP INSPECTION' : 'START INSPECTION'}
+        {/* Bottom Action for selected session */}
+        {selectedSession && !isMeasuring && (
+          <button 
+            onClick={() => setSelectedSession(null)}
+            className="w-full mt-4 bg-slate-800 border border-slate-700 p-4 rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-slate-700 transition-all"
+          >
+            <i className="fas fa-arrow-left"></i> RETOUR À L'ACCUEIL
           </button>
         )}
-        
-        {(activeData.length > 0 && !isMeasuring) && (
-          <>
-            <button onClick={handleAnalyze} disabled={isAnalyzing} className="px-6 bg-white text-slate-900 rounded-3xl font-black transition-all flex items-center gap-2">
-              {isAnalyzing ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-microchip text-indigo-500"></i>}
-              ANALYSE IA
-            </button>
-            <button onClick={exportCSV} className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-4 rounded-3xl font-black flex items-center gap-2">
-              <i className="fas fa-file-csv"></i> CSV
-            </button>
-            <button onClick={handlePDFExportClick} className="bg-red-600 hover:bg-red-700 text-white px-6 py-4 rounded-3xl font-black flex items-center gap-2">
-              <i className="fas fa-file-pdf"></i> PDF
-            </button>
-          </>
-        )}
-      </div>
+      </main>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <ValueDisplay label="Vitesse Réelle" value={speedMps * 3.6} unit="km/h" color="text-emerald-400" icon="fa-tachometer-alt" />
-        <ValueDisplay label="Point Kilométrique" value={currentAccel.pk || activeStats.startPK} unit="PK" color="text-cyan-400" icon="fa-map-pin" />
-        <ValueDisplay label="Transversal Y" value={currentAccel.y} unit="m/s²" color="text-indigo-400" icon="fa-arrows-turn-to-dots" />
-        <div className={`glass-card p-5 rounded-2xl flex flex-col items-center justify-center transition-all ${getAlertColor()}`}>
-          <span className="text-[10px] font-black text-white/70 uppercase mb-1">Alerte Y</span>
-          <div className="text-2xl font-black text-white">
-            {selectedSession ? '--' : 
-             (Math.abs(currentAccel.y) >= lai ? '!! LAI !!' : 
-              Math.abs(currentAccel.y) >= li ? '! LI !' :
-              Math.abs(currentAccel.y) >= la ? 'LA' : 'OK')}
-          </div>
-        </div>
-      </div>
+      {/* PDF Export Modal */}
+      {isPDFModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-300">
+          <div className="glass-card w-full max-w-md p-8 rounded-3xl border border-slate-700 shadow-2xl space-y-6">
+            <div className="text-center">
+              <div className="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center text-3xl mx-auto mb-4">
+                <i className="fas fa-file-export text-white"></i>
+              </div>
+              <h3 className="text-xl font-black">Exporter le Rapport PDF</h3>
+              <p className="text-sm text-slate-500 mt-2">Définissez la plage PK pour le rapport technique ATC LACHGUER.</p>
+            </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="glass-card p-6 rounded-3xl border-t-4 border-cyan-500">
-          <h3 className="text-xs font-black text-slate-500 uppercase mb-4 tracking-widest">Résumé Session - {activeStats.track}</h3>
-          <div className="space-y-3">
-            <div className="flex justify-between text-sm"><span className="text-slate-500">PK Actuel</span><span className="font-mono font-bold text-cyan-400">{(currentAccel.pk || activeStats.startPK).toFixed(3)}</span></div>
-            <div className="flex justify-between text-sm"><span className="text-slate-500">Acc. Max Z</span><span className="font-mono font-bold text-pink-400">{activeStats.maxVertical.toFixed(2)}</span></div>
-            <div className="flex justify-between text-sm"><span className="text-slate-500">Acc. Max T</span><span className="font-mono font-bold text-cyan-400">{activeStats.maxTransversal.toFixed(2)}</span></div>
-          </div>
-        </div>
-
-        <div className="glass-card p-6 rounded-3xl border-t-4 border-orange-500">
-          <h3 className="text-xs font-black text-slate-500 uppercase mb-4 tracking-widest">Dépassements Seuils (Y)</h3>
-          <div className="grid grid-cols-3 gap-2 text-center">
-            <div className="bg-yellow-500/10 p-2 rounded-xl"><div className="text-lg font-black text-yellow-500">{activeStats.countLA}</div><div className="text-[8px] uppercase font-bold text-slate-500">LA</div></div>
-            <div className="bg-orange-500/10 p-2 rounded-xl"><div className="text-lg font-black text-orange-500">{activeStats.countLI}</div><div className="text-[8px] uppercase font-bold text-slate-500">LI</div></div>
-            <div className="bg-red-500/10 p-2 rounded-xl"><div className="text-lg font-black text-red-500">{activeStats.countLAI}</div><div className="text-[8px] uppercase font-bold text-slate-500">LAI</div></div>
-          </div>
-        </div>
-
-        <div className="flex flex-col items-center justify-center bg-slate-900 rounded-3xl p-6 border border-slate-800">
-           <span className="text-slate-500 text-[10px] font-black uppercase mb-1">Impact G Z</span>
-           <span className={`text-5xl font-black ${activeStats.maxVertical / 9.81 > 0.4 ? 'text-red-500' : 'text-white'}`}>{(activeStats.maxVertical / 9.81).toFixed(2)}G</span>
-        </div>
-      </div>
-
-      <div ref={chartContainerRef} className="grid grid-cols-1 gap-4">
-        <MotionChart data={activeData} dataKey="y" name="Accélération Transversale Y (Seuils)" stroke="#818cf8" thresholds={{ la: activeStats.thresholdLA, li: activeStats.thresholdLI, lai: activeStats.thresholdLAI }} />
-        <MotionChart data={activeData} dataKey="z" name="Accélération Verticale Z" stroke="#f472b6" />
-      </div>
-
-      {activeAnalysis && (
-        <div className={`glass-card p-8 rounded-[2rem] border-l-[12px] animate-fade-in ${
-          activeAnalysis.complianceLevel === 'Critique' ? 'border-red-500' : 
-          activeAnalysis.complianceLevel === 'Surveillance' ? 'border-orange-500' : 'border-emerald-500'
-        }`}>
-          <div className="flex items-center justify-between mb-8">
-            <div className="flex items-center gap-4">
-              <div className="p-4 bg-indigo-500 rounded-2xl text-white">
-                <i className="fas fa-robot text-2xl"></i>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-[10px] text-slate-500 font-black uppercase mb-1 block">PK DÉBUT</label>
+                <input 
+                  type="number" step="0.001" value={exportPKStart} onChange={(e) => setExportPKStart(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-blue-400 font-mono"
+                />
               </div>
               <div>
-                <h2 className="text-2xl font-black text-white uppercase">Expertise Technique IA</h2>
-                <span className={`px-3 py-0.5 rounded-full text-[10px] font-black uppercase bg-slate-800 ${
-                  activeAnalysis.complianceLevel === 'Critique' ? 'text-red-400' : 
-                  activeAnalysis.complianceLevel === 'Surveillance' ? 'text-orange-400' : 'text-emerald-400'
-                }`}>Niveau de Vigilance : {activeAnalysis.complianceLevel}</span>
+                <label className="text-[10px] text-slate-500 font-black uppercase mb-1 block">PK FIN</label>
+                <input 
+                  type="number" step="0.001" value={exportPKEnd} onChange={(e) => setExportPKEnd(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-blue-400 font-mono"
+                />
               </div>
             </div>
-          </div>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
-            <div>
-              <p className="text-xl font-bold text-indigo-300">{activeAnalysis.activityType}</p>
-              <ul className="mt-4 space-y-2">
-                {activeAnalysis.observations.map((obs, idx) => (
-                  <li key={idx} className="text-sm text-slate-300 flex items-start gap-2">
-                    <i className="fas fa-caret-right text-indigo-500 mt-1"></i> {obs}
-                  </li>
-                ))}
-              </ul>
-            </div>
-            <div className="bg-slate-900/50 p-6 rounded-3xl border border-slate-800">
-              <span className="text-slate-500 text-[10px] font-black uppercase mb-4 block">Plan d'Action Préconisé</span>
-              <p className="text-sm text-slate-200 italic">"{activeAnalysis.recommendations}"</p>
-              <div className="mt-4 pt-4 border-t border-slate-800 flex items-center justify-between">
-                <span className="text-[10px] text-slate-500 font-bold uppercase">Score Intensité</span>
-                <span className="font-black text-white">{activeAnalysis.intensityScore}%</span>
-              </div>
+
+            <div className="flex gap-3">
+              <button 
+                onClick={() => setIsPDFModalOpen(false)}
+                className="flex-1 bg-slate-800 py-4 rounded-2xl font-bold hover:bg-slate-700 transition-all"
+              >
+                ANNULER
+              </button>
+              <button 
+                onClick={executePDFExport}
+                className="flex-2 bg-blue-600 py-4 px-8 rounded-2xl font-bold hover:bg-blue-700 shadow-xl shadow-blue-900/40 transition-all"
+              >
+                GÉNÉRER LE PDF
+              </button>
             </div>
           </div>
         </div>
       )}
 
-      <footer className="text-center text-slate-600 text-[10px] py-10 font-black uppercase tracking-[0.3em]">
-        <p>© 2025 INFRASTRUCTURE ANALYTICS PRO - GPS PK TRACKING V2.5</p>
+      {/* Placeholder Footer for mobile UX */}
+      <footer className="fixed bottom-0 left-0 right-0 h-16 bg-[#0f172a] border-t border-slate-800 flex items-center justify-around px-6 z-30">
+        <button className="text-blue-500 flex flex-col items-center gap-1">
+          <i className="fas fa-gauge-simple-high"></i>
+          <span className="text-[9px] font-bold">MONITOR</span>
+        </button>
+        <button className="text-slate-500 flex flex-col items-center gap-1" onClick={() => setSelectedSession(null)}>
+          <i className="fas fa-list-check"></i>
+          <span className="text-[9px] font-bold">HISTORIQUE</span>
+        </button>
+        <button className="text-slate-500 flex flex-col items-center gap-1">
+          <i className="fas fa-gear"></i>
+          <span className="text-[9px] font-bold">RÉGLAGES</span>
+        </button>
       </footer>
     </div>
   );
