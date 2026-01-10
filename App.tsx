@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { AccelerationData, SessionStats, GeminiAnalysis, PKDirection, TrackType, SessionRecord } from './types';
+import { AccelerationData, SessionStats, GeminiAnalysis, PKDirection, TrackType, SessionRecord, AudioSettings } from './types';
 import { MotionChart } from './components/MotionChart';
 import { ValueDisplay } from './components/ValueDisplay';
 import { analyzeMotionSession } from './services/geminiService';
@@ -17,9 +17,9 @@ const App: React.FC = () => {
   const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null);
 
   // Config Session & Métadonnées
-  const [startPK, setStartPK] = useState<string>('175.100');
+  const [startPK, setStartPK] = useState<string>('');
   const [direction, setDirection] = useState<PKDirection>('croissant');
-  const [track, setTrack] = useState<TrackType>('LGV2');
+  const [track, setTrack] = useState<TrackType>('');
   const [la, setLa] = useState<number>(1.2);
   const [li, setLi] = useState<number>(2.2);
   const [lai, setLai] = useState<number>(2.8);
@@ -31,6 +31,16 @@ const App: React.FC = () => {
   const [position, setPosition] = useState<string>('EN QUEUE');
   const [note, setNote] = useState<string>('');
 
+  // Audio & WakeLock States
+  const [audioSettings, setAudioSettings] = useState<AudioSettings>({
+    enabled: true,
+    alertLA: true,
+    alertLI: true,
+    alertLAI: true,
+    sessionEvents: true
+  });
+  const [isWakeLocked, setIsWakeLocked] = useState(false);
+
   // Historique et Sélection
   const [history, setHistory] = useState<SessionRecord[]>([]);
   const [selectedSession, setSelectedSession] = useState<SessionRecord | null>(null);
@@ -41,8 +51,8 @@ const App: React.FC = () => {
   const [exportPKEnd, setExportPKEnd] = useState<string>('');
 
   const [stats, setStats] = useState<SessionStats>({ 
-    startPK: 0, direction: 'croissant', track: 'LGV1', thresholdLA: 1.2, thresholdLI: 2.2, thresholdLAI: 2.8,
-    operator: '', line: '', train: '', engineNumber: '', position: '', note: '',
+    startPK: 0, direction: 'croissant', track: '', thresholdLA: 1.2, thresholdLI: 2.2, thresholdLAI: 2.8,
+    operator: 'LACHGUER', line: 'KENITRA/TANGER', train: 'RGV', engineNumber: '1208M1', position: 'EN QUEUE', note: '',
     maxVertical: 0, maxTransversal: 0, avgMagnitude: 0, duration: 0, countLA: 0, countLI: 0, countLAI: 0 
   });
 
@@ -57,64 +67,124 @@ const App: React.FC = () => {
   const currentSpeedRef = useRef<number>(0);
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const watchIdRef = useRef<number | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const wakeLockRef = useRef<any>(null);
+  const lastBeepTimeRef = useRef<number>(0);
 
-  useEffect(() => {
-    const stored = localStorage.getItem('gforce_history_v4');
-    if (stored) {
+  // --- WAKE LOCK API ---
+  const requestWakeLock = async () => {
+    if ('wakeLock' in navigator) {
       try {
-        setHistory(JSON.parse(stored));
-      } catch (e) {
-        console.error("Erreur chargement historique", e);
+        wakeLockRef.current = await (navigator as any).wakeLock.request('screen');
+        setIsWakeLocked(true);
+        wakeLockRef.current.addEventListener('release', () => {
+          setIsWakeLocked(false);
+        });
+      } catch (err: any) {
+        console.error(`${err.name}, ${err.message}`);
       }
     }
-  }, []);
+  };
 
-  const requestPermissions = async () => {
-    try {
-      if (typeof (DeviceMotionEvent as any).requestPermission === 'function') {
-        const response = await (DeviceMotionEvent as any).requestPermission();
-        if (response !== 'granted') {
-          setError("Permission accéléromètre refusée.");
-          return;
-        }
-      }
-      navigator.geolocation.getCurrentPosition(
-        () => setPermissionGranted(true),
-        (err) => {
-          setError(`Erreur GPS: ${err.message}`);
-          setPermissionGranted(false);
-        },
-        { enableHighAccuracy: true }
-      );
-    } catch (e) {
-      setError("Erreur lors de la demande de permissions.");
+  const releaseWakeLock = async () => {
+    if (wakeLockRef.current) {
+      await wakeLockRef.current.release();
+      wakeLockRef.current = null;
     }
   };
 
   useEffect(() => {
-    if (isMeasuring && permissionGranted) {
-      watchIdRef.current = navigator.geolocation.watchPosition(
-        (pos) => {
-          const speed = pos.coords.speed || 0;
-          setSpeedMps(speed);
-          currentSpeedRef.current = speed;
-          setGpsAccuracy(pos.coords.accuracy);
-        },
-        (err) => console.error("GPS Watch error", err),
-        { enableHighAccuracy: true }
-      );
-    } else {
-      if (watchIdRef.current !== null) {
-        navigator.geolocation.clearWatch(watchIdRef.current);
-        watchIdRef.current = null;
+    const handleVisibilityChange = async () => {
+      if (wakeLockRef.current !== null && document.visibilityState === 'visible' && isMeasuring) {
+        await requestWakeLock();
       }
-      setSpeedMps(0);
-      currentSpeedRef.current = 0;
-    }
-    return () => {
-      if (watchIdRef.current !== null) navigator.geolocation.clearWatch(watchIdRef.current);
     };
-  }, [isMeasuring, permissionGranted]);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [isMeasuring]);
+
+  // --- AUDIO FEEDBACK ---
+  const playTone = (freq: number, duration: number, type: OscillatorType = 'sine', volume: number = 0.1) => {
+    if (!audioSettings.enabled) return;
+    try {
+      if (!audioCtxRef.current) {
+        audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      }
+      const ctx = audioCtxRef.current;
+      if (ctx.state === 'suspended') ctx.resume();
+
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, ctx.currentTime);
+      
+      gain.gain.setValueAtTime(volume, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + duration);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start();
+      osc.stop(ctx.currentTime + duration);
+    } catch (e) {
+      console.warn("Audio playback failed", e);
+    }
+  };
+
+  const playStartSound = () => {
+    if (!audioSettings.sessionEvents) return;
+    playTone(440, 0.1);
+    setTimeout(() => playTone(554.37, 0.1), 100);
+    setTimeout(() => playTone(659.25, 0.2), 200);
+  };
+
+  const playStopSound = () => {
+    if (!audioSettings.sessionEvents) return;
+    playTone(659.25, 0.1);
+    setTimeout(() => playTone(554.37, 0.1), 100);
+    setTimeout(() => playTone(440, 0.2), 200);
+  };
+
+  const requestPermissions = async () => {
+    try {
+      if (typeof DeviceMotionEvent !== 'undefined' && (DeviceMotionEvent as any).requestPermission === 'function') {
+        const response = await (DeviceMotionEvent as any).requestPermission();
+        if (response === 'granted') {
+          setPermissionGranted(true);
+          setError(null);
+        } else {
+          setPermissionGranted(false);
+          setError("L'accès aux capteurs de mouvement a été refusé.");
+        }
+      } else {
+        setPermissionGranted(true);
+      }
+
+      if ('geolocation' in navigator) {
+        if (watchIdRef.current !== null) {
+          navigator.geolocation.clearWatch(watchIdRef.current);
+        }
+        watchIdRef.current = navigator.geolocation.watchPosition(
+          (position) => {
+            const speed = position.coords.speed || 0;
+            setSpeedMps(speed);
+            currentSpeedRef.current = speed;
+            setGpsAccuracy(position.coords.accuracy);
+          },
+          (err) => {
+            console.warn("Geolocation tracking error:", err);
+            setGpsAccuracy(null);
+          },
+          { enableHighAccuracy: true, maximumAge: 1000 }
+        );
+      }
+    } catch (e) {
+      console.error("Error requesting permissions:", e);
+      setError("Une erreur est survenue lors de la demande de permissions.");
+      setPermissionGranted(true);
+    }
+  };
 
   const handleMotion = useCallback((event: DeviceMotionEvent) => {
     const accel = event.acceleration;
@@ -146,12 +216,28 @@ const App: React.FC = () => {
     
     setCurrentAccel(newData);
     dataRef.current.push(newData);
+
+    const absY = Math.abs(y);
+    const absZ = Math.abs(z);
+    const now = Date.now();
+    
+    if (now - lastBeepTimeRef.current > 500) {
+        if (absY >= lai && audioSettings.alertLAI) {
+          playTone(1200, 0.3, 'square', 0.15);
+          lastBeepTimeRef.current = now;
+        } else if (absY >= li && audioSettings.alertLI) {
+          playTone(800, 0.2, 'sine', 0.1);
+          lastBeepTimeRef.current = now;
+        } else if (absY >= la && audioSettings.alertLA) {
+          playTone(400, 0.1, 'sine', 0.05);
+          lastBeepTimeRef.current = now;
+        }
+    }
     
     setStats(prev => {
       let nLA = prev.countLA;
       let nLI = prev.countLI;
       let nLAI = prev.countLAI;
-      const absY = Math.abs(y);
 
       if (absY >= lai) nLAI++;
       else if (absY >= li) nLI++;
@@ -159,8 +245,8 @@ const App: React.FC = () => {
 
       return {
         ...prev,
-        maxVertical: Math.max(prev.maxVertical, Math.abs(z)),
-        maxTransversal: Math.max(prev.maxTransversal, Math.abs(x), Math.abs(y)),
+        maxVertical: Math.max(prev.maxVertical, absZ),
+        maxTransversal: Math.max(prev.maxTransversal, Math.abs(x), absY),
         avgMagnitude: (prev.avgMagnitude * (dataRef.current.length - 1) + magnitude) / dataRef.current.length,
         duration: duration,
         countLA: nLA,
@@ -170,7 +256,7 @@ const App: React.FC = () => {
     });
 
     if (dataRef.current.length % 5 === 0) setData([...dataRef.current]);
-  }, [la, li, lai, direction]);
+  }, [la, li, lai, direction, audioSettings]);
 
   useEffect(() => {
     if (isMeasuring && permissionGranted) {
@@ -179,17 +265,49 @@ const App: React.FC = () => {
     } else {
       window.removeEventListener('devicemotion', handleMotion);
     }
-    return () => window.removeEventListener('devicemotion', handleMotion);
+    return () => {
+      window.removeEventListener('devicemotion', handleMotion);
+      if (watchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
+      }
+    };
   }, [isMeasuring, permissionGranted, handleMotion]);
 
-  const toggleMeasurement = () => {
+  const toggleMeasurement = async () => {
     if (!permissionGranted) {
-      requestPermissions();
+      await requestPermissions();
       return;
     }
-    
-    if (isMeasuring) {
+
+    if (!isMeasuring) {
+      if (startPK.trim() === '' || track === '') {
+        setError("Veuillez renseigner le PK de départ et la Voie avant de commencer.");
+        return;
+      }
+      setError(null);
+      
+      await requestWakeLock();
+
+      const numericPK = parseFloat(startPK) || 0;
+      currentPKRef.current = numericPK;
+      lastTimestampRef.current = 0;
+      setAnalysis(null);
+      dataRef.current = [];
+      setData([]);
+      setSelectedSession(null);
+      setStats({ 
+        startPK: numericPK, direction, track, thresholdLA: la, thresholdLI: li, thresholdLAI: lai,
+        operator, line, train, engineNumber, position, note,
+        maxVertical: 0, maxTransversal: 0, avgMagnitude: 0, duration: 0, countLA: 0, countLI: 0, countLAI: 0 
+      });
+      setIsMeasuring(true);
+      playStartSound();
+    } else {
       setIsMeasuring(false);
+      await releaseWakeLock();
+
+      playStopSound();
       const finalStats = { 
         ...stats, 
         startPK: parseFloat(startPK) || 0,
@@ -206,28 +324,20 @@ const App: React.FC = () => {
       setHistory(updatedHistory);
       localStorage.setItem('gforce_history_v4', JSON.stringify(updatedHistory));
       setSelectedSession(newRecord);
-    } else {
-      const numericPK = parseFloat(startPK) || 0;
-      currentPKRef.current = numericPK;
-      lastTimestampRef.current = 0;
-      setAnalysis(null);
-      dataRef.current = [];
-      setData([]);
-      setSelectedSession(null);
-      setStats({ 
-        startPK: numericPK, direction, track, thresholdLA: la, thresholdLI: li, thresholdLAI: lai,
-        operator, line, train, engineNumber, position, note,
-        maxVertical: 0, maxTransversal: 0, avgMagnitude: 0, duration: 0, countLA: 0, countLI: 0, countLAI: 0 
-      });
-      setIsMeasuring(true);
     }
   };
 
   const handleAnalyze = async () => {
     const sourceData = selectedSession ? selectedSession.data : dataRef.current;
     const sourceStats = selectedSession ? selectedSession.stats : stats;
-    if (sourceData.length < 50) return;
+    
+    if (sourceData.length < 10) {
+      setError("Pas assez de données pour l'analyse (minimum 10 points).");
+      return;
+    }
+
     setIsAnalyzing(true);
+    setError(null);
     try {
       const result = await analyzeMotionSession(sourceData, sourceStats);
       if (selectedSession) {
@@ -238,8 +348,9 @@ const App: React.FC = () => {
       } else {
         setAnalysis(result);
       }
-    } catch (err) {
-      setError("Analyse IA échouée.");
+    } catch (err: any) {
+      console.error(err);
+      setError(`Analyse échouée: ${err.message || "Erreur serveur IA"}`);
     } finally {
       setIsAnalyzing(false);
     }
@@ -261,7 +372,6 @@ const App: React.FC = () => {
     const pStart = parseFloat(exportPKStart);
     const pEnd = parseFloat(exportPKEnd);
     
-    // Filtrer les données pour l'export
     const filteredData = targetData.filter(d => {
       const pk = d.pk || 0;
       return pk >= Math.min(pStart, pEnd) && pk <= Math.max(pStart, pEnd);
@@ -269,7 +379,6 @@ const App: React.FC = () => {
 
     setIsPDFModalOpen(false);
     
-    // Créer un conteneur temporaire pour rendre les graphiques en style PDF (fond blanc)
     const exportDiv = document.createElement('div');
     exportDiv.style.position = 'absolute';
     exportDiv.style.left = '-9999px';
@@ -278,7 +387,6 @@ const App: React.FC = () => {
     exportDiv.style.padding = '40px';
     document.body.appendChild(exportDiv);
 
-    // Fonction pour générer une image de graphique
     const generateChartImage = async (dataKey: 'z' | 'y', label: string, stroke: string, thresholds?: any) => {
       const container = document.createElement('div');
       container.style.width = '900px';
@@ -286,7 +394,6 @@ const App: React.FC = () => {
       container.style.marginBottom = '20px';
       exportDiv.appendChild(container);
 
-      // On utilise temporairement ReactDOM pour rendre le graphique Recharts
       const root = (await import('react-dom/client')).createRoot(container);
       
       return new Promise<string>((resolve) => {
@@ -317,12 +424,11 @@ const App: React.FC = () => {
     const dateFull = selectedSession ? selectedSession.date : new Date().toLocaleString('fr-FR');
     const [dPart, tPart] = dateFull.split(' ');
 
-    // --- Header ATC LACHGUER ---
-    doc.setFontSize(26);
+    doc.setFontSize(28);
     doc.setFont("helvetica", "bold");
-    doc.setTextColor(30, 58, 138); // Dark Blue
+    doc.setTextColor(30, 58, 138); 
     doc.text("ATC", 140, 20);
-    doc.setTextColor(59, 130, 246); // Medium Blue
+    doc.setTextColor(59, 130, 246); 
     doc.text("LACHGUER", 154, 20);
     doc.setDrawColor(30, 58, 138);
     doc.setLineWidth(0.8);
@@ -332,12 +438,11 @@ const App: React.FC = () => {
     doc.setTextColor(100, 100, 100);
     doc.text("Expertise & Mesures Ferroviaires", 150, 26);
 
-    // --- Report Metadata ---
     doc.setFontSize(14);
     doc.setTextColor(0, 0, 0);
     doc.setFont("helvetica", "bold");
     const reportId = `${dPart.replace(/\//g, '')}_${tPart.replace(/:/g, '')}_${s.track}`;
-    doc.text(`RAPPORT ${reportId}`, 20, 20);
+    doc.text(`RAPPORT TECHNIQUE D'INSPECTION`, 20, 20);
 
     doc.setFontSize(10);
     doc.setFont("helvetica", "normal");
@@ -351,11 +456,9 @@ const App: React.FC = () => {
     doc.text(`Seuils ATC S1 / S2 / S3 : ${la.toFixed(1)} / ${li.toFixed(1)} / ${lai.toFixed(1)} m/s²`, 20, yPos); yPos += lineSpacing;
     doc.text(`Seuils AVC S1 / S2 / S3 : 0,0 / 0,0 / 0,0 m/s²`, 20, yPos);
 
-    // --- Graphiques ---
     doc.addImage(imgATC, 'PNG', 15, 80, 180, 80);
     doc.addImage(imgAVC, 'PNG', 15, 170, 180, 80);
 
-    // --- Footer ---
     doc.setFontSize(14);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(30, 58, 138);
@@ -385,7 +488,14 @@ const App: React.FC = () => {
           </div>
           <div>
             <h1 className="text-lg font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">G-Force Monitor Pro</h1>
-            <p className="text-[10px] text-slate-500 font-mono tracking-tighter uppercase">ATC LACHGUER - Infrastructure Analysis</p>
+            <div className="flex items-center gap-2">
+              <p className="text-[10px] text-slate-500 font-mono tracking-tighter uppercase">ATC LACHGUER - Analysis</p>
+              {isWakeLocked && (
+                <span className="text-[9px] bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded flex items-center gap-1 font-bold">
+                  <i className="fas fa-lock"></i> ÉCRAN ACTIF
+                </span>
+              )}
+            </div>
           </div>
         </div>
         <div className="flex gap-2">
@@ -410,82 +520,118 @@ const App: React.FC = () => {
 
       <main className="max-w-4xl mx-auto p-4 space-y-6">
         {error && (
-          <div className="bg-red-500/10 border border-red-500/50 p-4 rounded-xl flex items-center gap-3 text-red-400 text-sm">
+          <div className="bg-red-500/10 border border-red-500/50 p-4 rounded-xl flex items-center gap-3 text-red-400 text-sm animate-in fade-in duration-300">
             <i className="fas fa-exclamation-triangle"></i>
-            {error}
+            <div className="flex-1">
+              <span className="font-bold">Erreur : </span>
+              {error}
+            </div>
           </div>
         )}
 
         {/* Configuration Panel */}
         {!isMeasuring && !selectedSession && (
-          <div className="glass-card p-6 rounded-2xl border border-slate-800">
-            <h2 className="text-sm font-black text-slate-500 uppercase tracking-widest mb-6 flex items-center gap-2">
-              <i className="fas fa-sliders text-blue-500"></i> Configuration Inspection
-            </h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="space-y-4">
-                <div className="group">
-                  <label className="text-[10px] text-slate-500 font-bold uppercase mb-1 block ml-1">Point Kilométrique (PK)</label>
-                  <input 
-                    type="number" step="0.001" value={startPK} onChange={(e) => setStartPK(e.target.value)}
-                    className="w-full bg-slate-900/50 border border-slate-700 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all text-blue-400 font-mono"
-                  />
+          <div className="space-y-6">
+            <div className="glass-card p-6 rounded-2xl border border-slate-800">
+              <h2 className="text-sm font-black text-slate-500 uppercase tracking-widest mb-6 flex items-center gap-2">
+                <i className="fas fa-sliders text-blue-500"></i> Configuration Inspection
+              </h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="space-y-4">
+                  <div className="group">
+                    <label className="text-[10px] text-slate-500 font-bold uppercase mb-1 block ml-1">Point Kilométrique (PK)</label>
+                    <input 
+                      type="number" step="0.001" value={startPK} onChange={(e) => setStartPK(e.target.value)}
+                      placeholder="Ex: 175.100"
+                      className="w-full bg-slate-900/50 border border-slate-700 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all text-blue-400 font-mono"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-[10px] text-slate-500 font-bold uppercase mb-1 block ml-1">Sens PK</label>
+                      <select value={direction} onChange={(e) => setDirection(e.target.value as PKDirection)}
+                        className="w-full bg-slate-900/50 border border-slate-700 rounded-xl px-3 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500/50">
+                        <option value="croissant">Croissant</option>
+                        <option value="decroissant">Décroissant</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-slate-500 font-bold uppercase mb-1 block ml-1">Voie</label>
+                      <select value={track} onChange={(e) => setTrack(e.target.value as TrackType)}
+                        className="w-full bg-slate-900/50 border border-slate-700 rounded-xl px-3 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500/50">
+                        <option value="">Sélectionner...</option>
+                        <option value="LGV1">LGV 1</option>
+                        <option value="LGV2">LGV 2</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="text-[9px] text-slate-500 font-bold uppercase mb-1 block">Alerte (LA)</label>
+                      <input type="number" step="0.1" value={la} onChange={(e) => setLa(parseFloat(e.target.value))}
+                        className="w-full bg-slate-900/50 border border-slate-700 rounded-lg px-2 py-2 text-center text-xs" />
+                    </div>
+                    <div>
+                      <label className="text-[9px] text-slate-500 font-bold uppercase mb-1 block">Interv (LI)</label>
+                      <input type="number" step="0.1" value={li} onChange={(e) => setLi(parseFloat(e.target.value))}
+                        className="w-full bg-slate-900/50 border border-slate-700 rounded-lg px-2 py-2 text-center text-xs" />
+                    </div>
+                    <div>
+                      <label className="text-[9px] text-slate-500 font-bold uppercase mb-1 block">Immed (LAI)</label>
+                      <input type="number" step="0.1" value={lai} onChange={(e) => setLai(parseFloat(e.target.value))}
+                        className="w-full bg-slate-900/50 border border-slate-700 rounded-lg px-2 py-2 text-center text-xs" />
+                    </div>
+                  </div>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-[10px] text-slate-500 font-bold uppercase mb-1 block ml-1">Sens PK</label>
-                    <select value={direction} onChange={(e) => setDirection(e.target.value as PKDirection)}
-                      className="w-full bg-slate-900/50 border border-slate-700 rounded-xl px-3 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500/50">
-                      <option value="croissant">Croissant</option>
-                      <option value="decroissant">Décroissant</option>
-                    </select>
+
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-[10px] text-slate-500 font-bold uppercase mb-1 block">Opérateur</label>
+                      <input value={operator} onChange={(e) => setOperator(e.target.value)} className="w-full bg-slate-900/50 border border-slate-700 rounded-xl px-3 py-3 text-sm" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-slate-500 font-bold uppercase mb-1 block">Train</label>
+                      <input value={train} onChange={(e) => setTrain(e.target.value)} className="w-full bg-slate-900/50 border border-slate-700 rounded-xl px-3 py-3 text-sm" />
+                    </div>
                   </div>
                   <div>
-                    <label className="text-[10px] text-slate-500 font-bold uppercase mb-1 block ml-1">Voie</label>
-                    <select value={track} onChange={(e) => setTrack(e.target.value as TrackType)}
-                      className="w-full bg-slate-900/50 border border-slate-700 rounded-xl px-3 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500/50">
-                      <option value="LGV1">LGV 1</option>
-                      <option value="LGV2">LGV 2</option>
-                    </select>
-                  </div>
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                   <div>
-                    <label className="text-[9px] text-slate-500 font-bold uppercase mb-1 block">Alerte (LA)</label>
-                    <input type="number" step="0.1" value={la} onChange={(e) => setLa(parseFloat(e.target.value))}
-                      className="w-full bg-slate-900/50 border border-slate-700 rounded-lg px-2 py-2 text-center text-xs" />
+                    <label className="text-[10px] text-slate-500 font-bold uppercase mb-1 block">N° Motrice</label>
+                    <input value={engineNumber} onChange={(e) => setEngineNumber(e.target.value)} className="w-full bg-slate-900/50 border border-slate-700 rounded-xl px-3 py-3 text-sm" />
                   </div>
                   <div>
-                    <label className="text-[9px] text-slate-500 font-bold uppercase mb-1 block">Interv (LI)</label>
-                    <input type="number" step="0.1" value={li} onChange={(e) => setLi(parseFloat(e.target.value))}
-                      className="w-full bg-slate-900/50 border border-slate-700 rounded-lg px-2 py-2 text-center text-xs" />
-                  </div>
-                  <div>
-                    <label className="text-[9px] text-slate-500 font-bold uppercase mb-1 block">Immed (LAI)</label>
-                    <input type="number" step="0.1" value={lai} onChange={(e) => setLai(parseFloat(e.target.value))}
-                      className="w-full bg-slate-900/50 border border-slate-700 rounded-lg px-2 py-2 text-center text-xs" />
+                    <label className="text-[10px] text-slate-500 font-bold uppercase mb-1 block">Position</label>
+                    <input value={position} onChange={(e) => setPosition(e.target.value)} className="w-full bg-slate-900/50 border border-slate-700 rounded-xl px-3 py-3 text-sm" />
                   </div>
                 </div>
               </div>
+            </div>
 
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-[10px] text-slate-500 font-bold uppercase mb-1 block">Opérateur</label>
-                    <input value={operator} onChange={(e) => setOperator(e.target.value)} className="w-full bg-slate-900/50 border border-slate-700 rounded-xl px-3 py-3 text-sm" />
-                  </div>
-                  <div>
-                    <label className="text-[10px] text-slate-500 font-bold uppercase mb-1 block">Train</label>
-                    <input value={train} onChange={(e) => setTrain(e.target.value)} className="w-full bg-slate-900/50 border border-slate-700 rounded-xl px-3 py-3 text-sm" />
-                  </div>
+            {/* Audio & Settings Panel */}
+            <div className="glass-card p-6 rounded-2xl border border-slate-800">
+              <h2 className="text-sm font-black text-slate-500 uppercase tracking-widest mb-6 flex items-center gap-2">
+                <i className="fas fa-gears text-indigo-500"></i> Paramètres Système
+              </h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="flex items-center justify-between p-3 bg-slate-900/40 rounded-xl border border-slate-800/50">
+                   <div className="flex items-center gap-3">
+                     <i className={`fas fa-microphone ${audioSettings.enabled ? 'text-blue-500' : 'text-slate-600'}`}></i>
+                     <span className="text-sm font-bold">Alertes Audio</span>
+                   </div>
+                   <button 
+                     onClick={() => setAudioSettings(p => ({...p, enabled: !p.enabled}))}
+                     className={`w-12 h-6 rounded-full transition-all relative ${audioSettings.enabled ? 'bg-blue-600' : 'bg-slate-700'}`}
+                   >
+                     <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${audioSettings.enabled ? 'right-1' : 'left-1'}`}></div>
+                   </button>
                 </div>
-                <div>
-                  <label className="text-[10px] text-slate-500 font-bold uppercase mb-1 block">N° Motrice</label>
-                  <input value={engineNumber} onChange={(e) => setEngineNumber(e.target.value)} className="w-full bg-slate-900/50 border border-slate-700 rounded-xl px-3 py-3 text-sm" />
-                </div>
-                <div>
-                  <label className="text-[10px] text-slate-500 font-bold uppercase mb-1 block">Position</label>
-                  <input value={position} onChange={(e) => setPosition(e.target.value)} className="w-full bg-slate-900/50 border border-slate-700 rounded-xl px-3 py-3 text-sm" />
+                
+                <div className="flex items-center justify-between p-3 bg-slate-900/40 rounded-xl border border-slate-800/50">
+                   <div className="flex items-center gap-3">
+                     <i className={`fas fa-sun ${isWakeLocked ? 'text-yellow-500' : 'text-slate-600'}`}></i>
+                     <span className="text-sm font-bold">Anti-Veille Auto</span>
+                   </div>
+                   <div className="text-[10px] font-bold text-slate-500 uppercase">DÉMARRE AVEC MESURE</div>
                 </div>
               </div>
             </div>
@@ -507,26 +653,24 @@ const App: React.FC = () => {
               <MotionChart data={selectedSession ? selectedSession.data : data} dataKey="y" name="AVC (m/s²) - Transversale" stroke="#f43f5e" />
             </div>
 
-            {/* Actions Contextuelles */}
             <div className="flex flex-wrap gap-4 items-center justify-center pt-4">
               <button 
                 onClick={handleAnalyze} 
-                disabled={isAnalyzing || (selectedSession ? selectedSession.data.length < 10 : data.length < 10)}
-                className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 px-6 py-3 rounded-2xl font-bold flex items-center gap-2 transition-all shadow-xl shadow-indigo-900/20"
+                disabled={isAnalyzing || (selectedSession ? selectedSession.data.length < 5 : data.length < 5)}
+                className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 px-6 py-3 rounded-2xl font-bold flex items-center gap-2 transition-all shadow-xl shadow-indigo-900/20 min-w-[200px]"
               >
                 {isAnalyzing ? <i className="fas fa-spinner fa-spin"></i> : <i className="fas fa-brain"></i>}
-                ANALYSER PAR IA
+                {isAnalyzing ? 'ANALYSE EN COURS...' : 'ANALYSER PAR IA'}
               </button>
               <button 
                 onClick={handlePDFExportClick}
                 className="bg-slate-700 hover:bg-slate-600 px-6 py-3 rounded-2xl font-bold flex items-center gap-2 transition-all shadow-xl shadow-slate-900/20"
               >
                 <i className="fas fa-file-pdf"></i>
-                EXPORTER PDF (ATC LACHGUER)
+                EXPORTER PDF
               </button>
             </div>
 
-            {/* AI Result Card */}
             {(analysis || (selectedSession && selectedSession.analysis)) && (
               <div className="glass-card p-6 rounded-3xl border border-blue-500/30 bg-blue-500/5 animate-in fade-in slide-in-from-bottom-4 duration-500">
                 <div className="flex justify-between items-start mb-4">
@@ -549,26 +693,18 @@ const App: React.FC = () => {
                 
                 <div className="space-y-4">
                   <div className="bg-slate-900/60 p-4 rounded-xl border border-slate-800">
+                    <h4 className="text-[10px] text-slate-500 font-bold uppercase mb-2">Observations</h4>
+                    <ul className="text-sm text-slate-300 list-disc ml-4 space-y-1">
+                      {(selectedSession?.analysis || analysis)?.observations.map((obs, idx) => (
+                        <li key={idx}>{obs}</li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div className="bg-slate-900/60 p-4 rounded-xl border border-slate-800">
+                    <h4 className="text-[10px] text-slate-500 font-bold uppercase mb-2">Recommandations</h4>
                     <p className="text-sm italic text-slate-300">
                       "{(selectedSession?.analysis || analysis)?.recommendations}"
                     </p>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <p className="text-[10px] font-bold text-slate-500 uppercase">Observations Techniques</p>
-                      <ul className="text-sm space-y-1">
-                        {(selectedSession?.analysis || analysis)?.observations.map((obs, i) => (
-                          <li key={i} className="flex gap-2 items-start">
-                            <span className="text-blue-500 mt-1">•</span>
-                            <span className="text-slate-400">{obs}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                    <div className="flex flex-col justify-center items-center p-4 bg-slate-800/50 rounded-2xl">
-                      <span className="text-[10px] font-bold text-slate-500 uppercase mb-2">Score d'Intensité</span>
-                      <div className="text-4xl font-black text-blue-400">{(selectedSession?.analysis || analysis)?.intensityScore}<span className="text-sm text-slate-600">/100</span></div>
-                    </div>
                   </div>
                 </div>
               </div>
@@ -599,26 +735,21 @@ const App: React.FC = () => {
                       <div className="text-[10px] text-slate-500 flex gap-3 font-mono">
                         <span>PK: {record.stats.startPK.toFixed(3)}</span>
                         <span>DUR: {record.stats.duration.toFixed(0)}s</span>
-                        <span className={record.stats.countLI > 0 ? 'text-orange-400' : ''}>ANOM: {record.stats.countLI + record.stats.countLAI}</span>
                       </div>
                     </div>
                   </div>
-                  <div className="flex gap-2">
-                    {record.analysis && <i className="fas fa-robot text-blue-500"></i>}
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); deleteSession(record.id); }}
-                      className="w-8 h-8 rounded-lg bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white transition-all flex items-center justify-center"
-                    >
-                      <i className="fas fa-trash-can text-xs"></i>
-                    </button>
-                  </div>
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); deleteSession(record.id); }}
+                    className="w-8 h-8 rounded-lg bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white transition-all flex items-center justify-center"
+                  >
+                    <i className="fas fa-trash-can text-xs"></i>
+                  </button>
                 </div>
               ))}
             </div>
           </div>
         )}
 
-        {/* Bottom Action for selected session */}
         {selectedSession && !isMeasuring && (
           <button 
             onClick={() => setSelectedSession(null)}
@@ -640,7 +771,6 @@ const App: React.FC = () => {
               <h3 className="text-xl font-black">Exporter le Rapport PDF</h3>
               <p className="text-sm text-slate-500 mt-2">Définissez la plage PK pour le rapport technique ATC LACHGUER.</p>
             </div>
-
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="text-[10px] text-slate-500 font-black uppercase mb-1 block">PK DÉBUT</label>
@@ -657,39 +787,28 @@ const App: React.FC = () => {
                 />
               </div>
             </div>
-
             <div className="flex gap-3">
-              <button 
-                onClick={() => setIsPDFModalOpen(false)}
-                className="flex-1 bg-slate-800 py-4 rounded-2xl font-bold hover:bg-slate-700 transition-all"
-              >
-                ANNULER
-              </button>
-              <button 
-                onClick={executePDFExport}
-                className="flex-2 bg-blue-600 py-4 px-8 rounded-2xl font-bold hover:bg-blue-700 shadow-xl shadow-blue-900/40 transition-all"
-              >
-                GÉNÉRER LE PDF
-              </button>
+              <button onClick={() => setIsPDFModalOpen(false)} className="flex-1 bg-slate-800 py-4 rounded-2xl font-bold hover:bg-slate-700 transition-all">ANNULER</button>
+              <button onClick={executePDFExport} className="flex-2 bg-blue-600 py-4 px-8 rounded-2xl font-bold hover:bg-blue-700 shadow-xl shadow-blue-900/40 transition-all">GÉNÉRER LE PDF</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Placeholder Footer for mobile UX */}
+      {/* Footer ATC LACHGUER */}
       <footer className="fixed bottom-0 left-0 right-0 h-16 bg-[#0f172a] border-t border-slate-800 flex items-center justify-around px-6 z-30">
         <button className="text-blue-500 flex flex-col items-center gap-1">
           <i className="fas fa-gauge-simple-high"></i>
-          <span className="text-[9px] font-bold">MONITOR</span>
+          <span className="text-[9px] font-bold uppercase">Monitor</span>
         </button>
         <button className="text-slate-500 flex flex-col items-center gap-1" onClick={() => setSelectedSession(null)}>
           <i className="fas fa-list-check"></i>
-          <span className="text-[9px] font-bold">HISTORIQUE</span>
+          <span className="text-[9px] font-bold uppercase">Historique</span>
         </button>
-        <button className="text-slate-500 flex flex-col items-center gap-1">
-          <i className="fas fa-gear"></i>
-          <span className="text-[9px] font-bold">RÉGLAGES</span>
-        </button>
+        <div className="flex flex-col items-center opacity-40">
+           <span className="text-[8px] font-black text-blue-400">ATC LACHGUER</span>
+           <span className="text-[6px] font-mono">v2.2.0</span>
+        </div>
       </footer>
     </div>
   );

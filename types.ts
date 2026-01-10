@@ -9,7 +9,15 @@ export interface AccelerationData {
 }
 
 export type PKDirection = 'croissant' | 'decroissant';
-export type TrackType = 'LGV1' | 'LGV2';
+export type TrackType = 'LGV1' | 'LGV2' | '';
+
+export interface AudioSettings {
+  enabled: boolean;
+  alertLA: boolean;
+  alertLI: boolean;
+  alertLAI: boolean;
+  sessionEvents: boolean;
+}
 
 export interface SessionConfig {
   startPK: number;
